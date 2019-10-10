@@ -2,9 +2,8 @@
 
 #define THIS_FILE "main.c"
 
-static pjsip_endpoint *sip_endpt;
-static pj_bool_t quit_flag;
-static pjsip_dialog *dlg;
+my_config_t app;
+pj_bool_t quit_flag;
 
 static int handler_events(void *arg)
 {
@@ -13,7 +12,7 @@ static int handler_events(void *arg)
     while (!quit_flag)
     {
         pj_time_val timeout = {0, 500};
-        pjsip_endpt_handle_events(sip_endpt, &timeout);
+        pjsip_endpt_handle_events(app.sip_endpt, &timeout);
     }
 
     return 0;
@@ -56,18 +55,9 @@ static pjsip_module app_module =
         &on_tsx_state                   /* on_tsx_state()*/
 };
 
-/*
- * main()
- *
- */
-int main(int argc, char *argv[])
+static pj_status_t init_SBC()
 {
-    pj_caching_pool cp;
-    pj_thread_t *thread;
-    pj_pool_t *pool;
     pj_status_t status;
-    pjsip_tx_data *p_data;
-
     /* Must init PJLIB first: */
     status = pj_init();
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, 1);
@@ -77,11 +67,11 @@ int main(int argc, char *argv[])
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, 1);
 
     /* Must create a pool factory before we can allocate any memory. */
-    pj_caching_pool_init(&cp, &pj_pool_factory_default_policy, 0);
+    pj_caching_pool_init(&app.cp, &pj_pool_factory_default_policy, 0);
 
     /* Create the endpoint: */
-    status = pjsip_endpt_create(&cp.factory, "sipstateless",
-                                &sip_endpt);
+    status = pjsip_endpt_create(&app.cp.factory, "sipstateless",
+                                &app.sip_endpt);
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, 1);
 
     pj_sockaddr_in addr;
@@ -90,7 +80,7 @@ int main(int argc, char *argv[])
     addr.sin_addr.s_addr = 0;
     addr.sin_port = pj_htons(FIRST_PORT);
 
-    status = pjsip_udp_transport_start(sip_endpt, &addr, NULL, 1, NULL);
+    status = pjsip_udp_transport_start(app.sip_endpt, &addr, NULL, 1, &app.trans_port[0]);
     if (status != PJ_SUCCESS)
     {
         PJ_LOG(3, (THIS_FILE,
@@ -100,7 +90,7 @@ int main(int argc, char *argv[])
 
     addr.sin_port = pj_htons(SECOND_PORT);
 
-     status = pjsip_udp_transport_start(sip_endpt, &addr, NULL, 1, NULL);
+     status = pjsip_udp_transport_start(app.sip_endpt, &addr, NULL, 1, &app.trans_port[1]);
     if (status != PJ_SUCCESS)
     {
         PJ_LOG(3, (THIS_FILE,
@@ -108,20 +98,31 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    status = pjsip_tsx_layer_init_module(sip_endpt);
+    status = pjsip_tsx_layer_init_module(app.sip_endpt);
     pj_assert(status == PJ_SUCCESS);
 
-    status = pjsip_ua_init_module(sip_endpt, NULL);
+    status = pjsip_ua_init_module(app.sip_endpt, NULL);
     pj_assert(status == PJ_SUCCESS);
 
-    status = pjsip_endpt_register_module(sip_endpt, &app_module);
+    status = pjsip_endpt_register_module(app.sip_endpt, &app_module);
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, 1);
 
-    pool = pjsip_endpt_create_pool(sip_endpt, "", 1000, 1000);
+    app.pool = pjsip_endpt_create_pool(app.sip_endpt, "", 1000, 1000);
 
-    status = pj_thread_create(pool, "", &handler_events, NULL, 0, 0, &thread);
+    status = pj_thread_create(app.pool, "", &handler_events, NULL, 0, 0, &app.thread);
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, 1);
+}
 
+/*
+ * main()
+ *
+ */
+int main(int argc, char *argv[])
+{
+    pj_status_t status;
+    status = init_SBC();
+    PJ_ASSERT_RETURN(status == PJ_SUCCESS, 1);
+    
     for (;;)
     {
         char line[10];
