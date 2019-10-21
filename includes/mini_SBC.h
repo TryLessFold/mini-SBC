@@ -11,10 +11,12 @@
 #include <px_SBC.h>
 
 #define MAX_PORTS 16
+#define DEFAULT_PORT 5060
+#define UNDEFINED_PORT -1
 
 typedef struct my_config
 {
-    pj_sockaddr local_addr;
+    pj_str_t local_host;
     unsigned short port[MAX_PORTS];
     
     pjsip_endpoint *sip_endpt;
@@ -28,34 +30,44 @@ typedef struct my_config
     pj_thread_t *thread;
     
     pjsip_dialog *dlg[2];
-    unsigned networks_cnt;
-    pjsip_host_port[MAX_PORTS];
+    unsigned hosts_cnt;
+    pjsip_host_port hosts[MAX_PORTS];
 } my_config_t;
 
 extern my_config_t app;
-
-typedef int sbc_status_t;
 
 /* Output error */
 void app_perror(const char *sender,
                        const char *title,
                        pj_status_t status);
 
-sbc_status_t SBC_init()
+pj_status_t init_options(int argc, char *argv[]);
+
+pj_status_t init_SBC();
 
 /* Determines if Uri is local fo this host */
 pj_bool_t is_uri_local(const pjsip_sip_uri *uri);
 
-/* Changes Request-Uri for redirect */
-sbc_status_t SBC_redirect(pjsip_tx_data *tdata);
+/* Changes Request-Uri in tdata for redirect, headers for hide info
+ * Fills num_host, which point to needed transport
+ */
+pj_status_t SBC_request_redirect(pjsip_tx_data *tdata, int *num_host);
+
+/* Changes  in tdatafor redirect 
+ * Fills num_host, which point to needed transport
+ */
+pj_status_t SBC_response_redirect(pjsip_tx_data *tdata, pjsip_response_addr *res_addr);
 
 /* Changes Via header for hide local server */
 pj_status_t via_hdr_hide_host(pjsip_via_hdr *via, pj_str_t host, int port);
 
 /* Changes To header for redirect request/response */
-pj_status_t to_hdr_redirect(pjsip_to_hdr *to, pj_str_t host);
+pj_status_t to_hdr_redirect(pjsip_to_hdr *to, pj_str_t host, int port);
 
 /* Changes From header for hide local server*/
-pj_status_t from_hdr_hide_host(pjsip_from_hdr *from, pj_str_t host);
+pj_status_t from_hdr_hide_host(pjsip_from_hdr *from, pj_str_t host, int port);
+
+/* Changes Contact header for hide local server*/
+pj_status_t contact_hdr_hide_host(pjsip_contact_hdr *cont, pj_str_t host, int port);
 
 #endif //__MINI_SBC__
