@@ -10,6 +10,7 @@
 #include <rx_get_port.h>
 #include <px_SBC.h>
 
+#define TRANSPORT_TYPE PJSIP_TRANSPORT_UDP
 #define MAX_PORTS 16
 #define DEFAULT_PORT 5060
 #define UNDEFINED_PORT -1

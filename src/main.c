@@ -20,6 +20,7 @@ static int handler_events(void *arg)
 
 static pj_bool_t on_rx_request(pjsip_rx_data *rdata)
 {
+    PJ_LOG(3, (THIS_FILE, "RX"));
     pjsip_tx_data *tdata;
     pj_status_t status;
     pjsip_sip_uri *target;
@@ -32,10 +33,8 @@ static pj_bool_t on_rx_request(pjsip_rx_data *rdata)
     }
     pjsip_msg_find_remove_hdr(tdata->msg, PJSIP_H_VIA, NULL);
     SBC_request_redirect(tdata, &num_host);
-    // status = pjsip_endpt_send_request_stateless(app.sip_endpt, tdata,
-    //                                             NULL, NULL);
-    pj_str_t tmp = pj_str(app.hosts[num_host].host.ptr);
-    pj_sockaddr lala =
+
+    pj_sockaddr dst_host =
         {
             .ipv4 = {
                 PJ_AF_INET,
@@ -43,8 +42,8 @@ static pj_bool_t on_rx_request(pjsip_rx_data *rdata)
                 pj_inet_addr(&app.hosts[num_host].host)}};
     status = pjsip_transport_send(app.trans_port[num_host],
                                   tdata,
-                                  (pj_sockaddr_t *)&lala,
-                                  sizeof(lala),
+                                  (pj_sockaddr_t *)&dst_host,
+                                  sizeof(dst_host),
                                   NULL,
                                   NULL);
     if (status != PJ_SUCCESS)
@@ -56,17 +55,28 @@ static pj_bool_t on_rx_request(pjsip_rx_data *rdata)
 
 static pj_status_t on_rx_response(pjsip_rx_data *rdata)
 {
-    pjsip_tx_data *tdata;
+    PJ_LOG(3, (THIS_FILE, "RX"));
+    pjsip_tx_data *tdata, *tedata;
     pjsip_response_addr res_addr;
     pjsip_via_hdr *hdr_via;
     pj_status_t status;
 
     /* Create response to be forwarded upstream (Via will be stripped here) */
-    status = pjsip_endpt_create_response_fwd(app.sip_endpt, rdata, 0, &tdata);
+    status = pjsip_endpt_create_tdata(app.sip_endpt, &tdata);
     if (status != PJ_SUCCESS)
     {
-        app_perror(THIS_FILE, "Error creating response", status);
-        return PJ_TRUE;
+       app_perror(THIS_FILE, "Error creating response", status);
+       return PJ_TRUE;
+    }
+    pjsip_tx_data_add_ref(tdata);
+
+    tdata->msg = pjsip_msg_clone(app.pool, rdata->msg_info.msg);
+
+    status = pjsip_endpt_create_response_fwd(app.sip_endpt, rdata, 0, &tedata);
+    if (status != PJ_SUCCESS)
+    {
+       app_perror(THIS_FILE, "Error creating response", status);
+       return PJ_TRUE;
     }
 
     /* Get topmost Via header */
@@ -79,6 +89,27 @@ static pj_status_t on_rx_response(pjsip_rx_data *rdata)
     }
 
     SBC_response_redirect(tdata, &res_addr);
+
+    /* Forward response */
+    pj_sockaddr dst_host =
+        {
+            .ipv4 = {
+                PJ_AF_INET,
+                pj_htons(res_addr.dst_host.addr.port),
+                pj_inet_addr(&res_addr.dst_host.addr.host)}};
+    status = pjsip_transport_send(res_addr.transport,
+                                  tdata,
+                                  (pj_sockaddr_t *)&dst_host,
+                                  sizeof(dst_host),
+                                  NULL,
+                                  NULL);
+    // status = pjsip_endpt_send_response(app.sip_endpt, &res_addr, tdata, 
+	// 			       NULL, NULL);
+    if (status != PJ_SUCCESS)
+    {
+        app_perror(THIS_FILE, "Error forwarding response", status);
+        return PJ_TRUE;
+    }
 }
 
 static void on_tsx_state(pjsip_transaction *tsx, pjsip_event *event)
@@ -166,12 +197,6 @@ static pj_status_t init_sip()
     }
 
     app.tpmgr = app.trans_port[0]->tpmgr;
-
-    status = pjsip_tsx_layer_init_module(app.sip_endpt);
-    pj_assert(status == PJ_SUCCESS);
-
-    status = pjsip_ua_init_module(app.sip_endpt, NULL);
-    pj_assert(status == PJ_SUCCESS);
 
     status = pjsip_endpt_register_module(app.sip_endpt, &app_module);
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, 1);

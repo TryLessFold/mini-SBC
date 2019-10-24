@@ -59,7 +59,7 @@ pj_status_t SBC_request_redirect(pjsip_tx_data *tdata, int *num_host)
     else if (target->port == app.port[1])
     {
         char *dest_host = app.hosts[0].host.ptr;
-        to_hdr_redirect(hdr_to, app.hosts[0].host, app.hosts[1].port);
+        to_hdr_redirect(hdr_to, app.hosts[0].host, app.hosts[0].port);
         from_hdr_hide_host(hdr_from, app.local_host, app.port[0]);
         via_hdr_hide_host(hdr_via, app.local_host, app.port[0]);
         contact_hdr_hide_host(hdr_cont, app.local_host, app.port[0]);
@@ -85,19 +85,32 @@ pj_status_t SBC_response_redirect(pjsip_tx_data *tdata, pjsip_response_addr *res
     hdr_from = (pjsip_fromto_hdr *)pjsip_msg_find_hdr(tdata->msg, PJSIP_H_FROM, NULL);
     hdr_cont = (pjsip_contact_hdr *)pjsip_msg_find_hdr(tdata->msg, PJSIP_H_CONTACT, NULL);
     to_hdr_redirect(hdr_to, app.local_host, app.port[1]);
+    res_addr->dst_host.type = TRANSPORT_TYPE;
+    res_addr->dst_host.flag = pjsip_transport_get_flag_from_type(TRANSPORT_TYPE);
     if (hdr_via->rport_param == app.port[0])
     {
         from_hdr_hide_host(hdr_from, app.hosts[1].host, app.hosts[1].port);
         via_hdr_hide_host(hdr_via, app.hosts[1].host, app.hosts[1].port);
-        if (hdr_cont!=NULL)
-            contact_hdr_hide_host(hdr_cont, app.hosts[1].host, app.hosts[1].port);
+        hdr_via->recvd_param = app.hosts[1].host;
+        hdr_via->rport_param = app.hosts[1].port;
+        if (hdr_cont != NULL)
+            contact_hdr_hide_host(hdr_cont, app.local_host, app.port[1]);
+        res_addr->dst_host.addr.host = app.hosts[1].host;
+        res_addr->dst_host.addr.port = app.hosts[1].port;
+        res_addr->transport = app.trans_port[1];
+        
     }
     else if (hdr_via->rport_param == app.port[1])
     {
         from_hdr_hide_host(hdr_from, app.hosts[0].host, app.hosts[0].port);
         via_hdr_hide_host(hdr_via, app.hosts[0].host, app.hosts[0].port);
+        hdr_via->recvd_param = app.hosts[0].host;
+        hdr_via->rport_param = app.hosts[0].port;
         if (hdr_cont!=NULL)
-            contact_hdr_hide_host(hdr_cont, app.hosts[0].host, app.hosts[0].port);
+            contact_hdr_hide_host(hdr_cont, app.local_host, app.port[0]);
+        res_addr->dst_host.addr.host = app.hosts[0].host;
+        res_addr->dst_host.addr.port = app.hosts[0].port;
+        res_addr->transport = app.trans_port[0];
     }
     else
     {
