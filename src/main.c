@@ -2,8 +2,28 @@
 
 #define THIS_FILE "main.c"
 
-my_config_t app;
-pj_bool_t quit_flag;
+my_config_t app = {0};
+pj_bool_t quit_flag = 0;
+
+static pj_bool_t on_rx_request(pjsip_rx_data *rdata);
+static pj_status_t on_rx_response(pjsip_rx_data *rdata);
+
+static pjsip_module app_module =
+    {
+        NULL, NULL,                     /* prev, next.*/
+        {"app_module", 12},             /* Name.*/
+        -1,                             /* Id, automatically*/
+        PJSIP_MOD_PRIORITY_APPLICATION, /* Priority*/
+        NULL,                           /* load()*/
+        NULL,                           /* start()*/
+        NULL,                           /* stop()*/
+        NULL,                           /* unload()*/
+        &on_rx_request,                 /* on_rx_request(), incoming message*/
+        &on_rx_response,                /* on_rx_response()*/
+        NULL,                           /* on_tx_request.*/
+        NULL,                           /* on_tx_response()*/
+        NULL                            /* on_tsx_state()*/
+};
 
 static int handler_events(void *arg)
 {
@@ -20,27 +40,82 @@ static int handler_events(void *arg)
 
 static pj_bool_t on_rx_request(pjsip_rx_data *rdata)
 {
-    PJ_LOG(3, (THIS_FILE, "RX"));
+    PJ_LOG(3, (THIS_FILE, "RXReq"));
     pjsip_tx_data *tdata;
     pj_status_t status;
     pjsip_sip_uri *target;
-    int num_host;
+    pjsip_host_port local_host;
+    pj_uint16_t rtp_port;
+    char num_to;
 
+    /* Create tdata */
     status = pjsip_endpt_create_request_fwd(app.sip_endpt, rdata, NULL, NULL, 0, &tdata);
     if (status != PJ_SUCCESS)
     {
         app_perror(THIS_FILE, "Can't create tdata", status);
     }
     pjsip_msg_find_remove_hdr(tdata->msg, PJSIP_H_VIA, NULL);
-    SBC_request_redirect(tdata, &num_host);
 
+    /* Create structure of local host */
+
+    if (rx_get_port(rdata) == app.port[0])
+    {
+        num_to = 1;
+    }
+    else if (rx_get_port(rdata) == app.port[1])
+    {
+        num_to = 0;
+    }
+
+    local_host.host = app.local_addr;
+    local_host.port = app.port[num_to];
+
+    /* What to do with media transport */
+    rtp_port = (pj_uint16_t)(app.media.rtp_port & 0xFFFE);
+    switch (rx_get_method(rdata)->id)
+    {
+    case PJSIP_INVITE_METHOD:
+        if ((app.media.trans_port[num_to] == NULL))
+        {
+            status = SBC_create_transport(&app.media.trans_port[num_to], &rtp_port);
+            if (status != PJ_SUCCESS)
+            {
+                app_perror(THIS_FILE, "Media transport couldn't be created (port in use?)", status);
+                return -1;
+            }
+        }
+        break;
+    case PJSIP_CANCEL_METHOD:
+    case PJSIP_BYE_METHOD:
+        if (app.media.trans_port[num_to]!=NULL)
+        {
+            status = pjmedia_transport_close(app.media.trans_port[num_to]);
+            if (status == PJ_SUCCESS)
+            {
+                PJ_LOG(3, (THIS_FILE, "Media transport(%d) has been closed successfully", num_to));
+                app.media.trans_port[num_to] = NULL;
+            }
+            else
+            {
+                app_perror(THIS_FILE, "Media transport(%d) hasn't been closed", num_to);
+            }
+        }
+        break;
+    default:
+        break;
+    }
+
+    /* Change headers for hide dest host and request request */
+    SBC_request_redirect(tdata, app.hosts[num_to], local_host);
+
+    /* Forward request */
     pj_sockaddr dst_host =
         {
             .ipv4 = {
                 PJ_AF_INET,
-                pj_htons(app.hosts[num_host].port),
-                pj_inet_addr(&app.hosts[num_host].host)}};
-    status = pjsip_transport_send(app.trans_port[num_host],
+                pj_htons(app.hosts[num_to].port),
+                pj_inet_addr(&app.hosts[num_to].host)}};
+    status = pjsip_transport_send(app.trans_port[num_to],
                                   tdata,
                                   (pj_sockaddr_t *)&dst_host,
                                   sizeof(dst_host),
@@ -51,33 +126,29 @@ static pj_bool_t on_rx_request(pjsip_rx_data *rdata)
         app_perror(THIS_FILE, "Error forwarding request", status);
         return PJ_TRUE;
     }
+    pjsip_tx_data_dec_ref(tdata);
 }
 
 static pj_status_t on_rx_response(pjsip_rx_data *rdata)
 {
-    PJ_LOG(3, (THIS_FILE, "RX"));
-    pjsip_tx_data *tdata, *tedata;
+    PJ_LOG(3, (THIS_FILE, "RXRes"));
+    pjsip_tx_data *tdata;
     pjsip_response_addr res_addr;
     pjsip_via_hdr *hdr_via;
     pj_status_t status;
+    pjsip_host_port local_host;
+    char num_host;
 
-    /* Create response to be forwarded upstream (Via will be stripped here) */
+    /* Create txdata and clone msg from rx to tx */
     status = pjsip_endpt_create_tdata(app.sip_endpt, &tdata);
     if (status != PJ_SUCCESS)
     {
-       app_perror(THIS_FILE, "Error creating response", status);
-       return PJ_TRUE;
+        app_perror(THIS_FILE, "Error creating response", status);
+        return PJ_TRUE;
     }
     pjsip_tx_data_add_ref(tdata);
 
     tdata->msg = pjsip_msg_clone(app.pool, rdata->msg_info.msg);
-
-    status = pjsip_endpt_create_response_fwd(app.sip_endpt, rdata, 0, &tedata);
-    if (status != PJ_SUCCESS)
-    {
-       app_perror(THIS_FILE, "Error creating response", status);
-       return PJ_TRUE;
-    }
 
     /* Get topmost Via header */
     hdr_via = (pjsip_via_hdr *)pjsip_msg_find_hdr(tdata->msg, PJSIP_H_VIA, NULL);
@@ -88,7 +159,20 @@ static pj_status_t on_rx_response(pjsip_rx_data *rdata)
         return PJ_TRUE;
     }
 
-    SBC_response_redirect(tdata, &res_addr);
+    /* Change headers for hide dest host and redirect response */
+    if (rx_get_port(rdata) == app.port[0])
+    {
+        num_host = 1;
+    }
+    else if (rx_get_port(rdata) == app.port[1])
+    {
+        num_host = 0;
+    }
+
+    local_host.host = app.local_addr;
+    local_host.port = app.port[num_host];
+
+    SBC_response_redirect(tdata, app.hosts[num_host], local_host, &res_addr);
 
     /* Forward response */
     pj_sockaddr dst_host =
@@ -97,49 +181,19 @@ static pj_status_t on_rx_response(pjsip_rx_data *rdata)
                 PJ_AF_INET,
                 pj_htons(res_addr.dst_host.addr.port),
                 pj_inet_addr(&res_addr.dst_host.addr.host)}};
-    status = pjsip_transport_send(res_addr.transport,
+    status = pjsip_transport_send(app.trans_port[num_host],
                                   tdata,
                                   (pj_sockaddr_t *)&dst_host,
                                   sizeof(dst_host),
                                   NULL,
                                   NULL);
-    // status = pjsip_endpt_send_response(app.sip_endpt, &res_addr, tdata, 
-	// 			       NULL, NULL);
     if (status != PJ_SUCCESS)
     {
         app_perror(THIS_FILE, "Error forwarding response", status);
         return PJ_TRUE;
     }
+    pjsip_tx_data_dec_ref(tdata);
 }
-
-static void on_tsx_state(pjsip_transaction *tsx, pjsip_event *event)
-{
-    PJ_LOG(3, (THIS_FILE, "Role: %d, Method: %s, Type event: %d",
-               tsx->role, tsx->method.name, event->type));
-}
-
-static void rx_callback(pjsip_endpoint *sip_endpt, pj_status_t status, pjsip_rx_data *rdata)
-{
-    PJ_LOG(3, (THIS_FILE, "rx_callback Addr: %d",
-               rx_get_port(rdata)));
-}
-
-static pjsip_module app_module =
-    {
-        NULL, NULL,                     /* prev, next.*/
-        {"app_module", 12},             /* Name.*/
-        -1,                             /* Id, automatically*/
-        PJSIP_MOD_PRIORITY_APPLICATION, /* Priority*/
-        NULL,                           /* load()*/
-        NULL,                           /* start()*/
-        NULL,                           /* stop()*/
-        NULL,                           /* unload()*/
-        &on_rx_request,                 /* on_rx_request(), incoming message*/
-        &on_rx_response,                /* on_rx_response()*/
-        NULL,                           /* on_tx_request.*/
-        NULL,                           /* on_tx_response()*/
-        &on_tsx_state                   /* on_tsx_state()*/
-};
 
 static pj_status_t init_pj()
 {
@@ -164,7 +218,7 @@ static pj_status_t init_pj()
 
     /* Create media endpoint */
     status = pjmedia_endpt_create(&app.cp.factory, pjsip_endpt_get_ioqueue(app.sip_endpt),
-                                  0, &app.media_endpt);
+                                  0, &app.media.endpt);
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, 1);
 }
 
@@ -209,6 +263,24 @@ static pj_status_t init_sip()
 static pj_status_t init_media()
 {
     pj_status_t status;
+    pj_uint16_t rtp_port;
+    int i, count;
+
+    pjmedia_codec_g711_init(app.media.endpt);
+
+    /* RTP port counter */
+    // rtp_port = (pj_uint16_t)(app.media.rtp_port & 0xFFFE);
+
+    // for (i = 0; i < app.hosts_cnt; i++)
+    // {
+    //     status = SBC_create_transport(app.media.trans_port[i], &rtp_port);
+    //     if (status != PJ_SUCCESS)
+    //     {
+    //         app_perror(THIS_FILE, "Media transport couldn't be created (port in use?)", status);
+    //         return -1;
+    //     }
+    // }
+    return PJ_SUCCESS;
 }
 
 /*
@@ -219,9 +291,12 @@ int main(int argc, char *argv[])
 {
     pj_status_t status;
 
+    /* Must be initialized first */
     status = init_pj();
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, 1);
 
+    /* Must be initializ
+    ed second */
     status = init_options(argc, argv);
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, 1);
 
@@ -231,8 +306,8 @@ int main(int argc, char *argv[])
     status = init_SBC();
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, 1);
 
-    // status = init_pj();
-    // PJ_ASSERT_RETURN(status == PJ_SUCCESS, 1);
+    status = init_media();
+    PJ_ASSERT_RETURN(status == PJ_SUCCESS, 1);
 
     for (;;)
     {
@@ -243,9 +318,21 @@ int main(int argc, char *argv[])
         switch (line[0])
         {
         case 'q':
-            break;
+            goto return_exit;
         }
     }
+
+return_exit:
+    pj_thread_destroy(app.thread);
+
+    if (app.pool)
+    {
+        pj_pool_release(app.pool);
+        app.pool = NULL;
+        pj_caching_pool_destroy(&app.cp);
+    }
+
+    pj_shutdown();
     quit_flag = 1;
     return 0;
 }
