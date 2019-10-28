@@ -9,4 +9,6 @@ short rx_get_port(pjsip_rx_data *rdata);
 
 pjsip_method *rx_get_method(pjsip_rx_data *rdata);
 
+pjsip_status_code rx_get_status(pjsip_rx_data *rdata);
+
 #endif //__RX_GET_PORT__

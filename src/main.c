@@ -45,68 +45,45 @@ static pj_bool_t on_rx_request(pjsip_rx_data *rdata)
     pj_status_t status;
     pjsip_sip_uri *target;
     pjsip_host_port local_host;
-    pj_uint16_t rtp_port;
-    char num_to;
+    short num_to, num_from;
 
     /* Create tdata */
     status = pjsip_endpt_create_request_fwd(app.sip_endpt, rdata, NULL, NULL, 0, &tdata);
     if (status != PJ_SUCCESS)
     {
+        pjsip_endpt_respond_stateless(app.sip_endpt, rdata,
+                                      PJSIP_SC_INTERNAL_SERVER_ERROR, NULL,
+                                      NULL, NULL);
         app_perror(THIS_FILE, "Can't create tdata", status);
     }
     pjsip_msg_find_remove_hdr(tdata->msg, PJSIP_H_VIA, NULL);
 
-    /* Create structure of local host */
-
     if (rx_get_port(rdata) == app.port[0])
     {
+        num_from = 0;
         num_to = 1;
     }
     else if (rx_get_port(rdata) == app.port[1])
     {
+        num_from = 1;
         num_to = 0;
     }
 
     local_host.host = app.local_addr;
     local_host.port = app.port[num_to];
 
-    /* What to do with media transport */
-    rtp_port = (pj_uint16_t)(app.media.rtp_port & 0xFFFE);
-    switch (rx_get_method(rdata)->id)
+    /* Creates transport for specific port */
+    status = SBC_calculate_transports(rdata, num_to, num_from);
+    if (status != PJ_SUCCESS)
     {
-    case PJSIP_INVITE_METHOD:
-        if ((app.media.trans_port[num_to] == NULL))
-        {
-            status = SBC_create_transport(&app.media.trans_port[num_to], &rtp_port);
-            if (status != PJ_SUCCESS)
-            {
-                app_perror(THIS_FILE, "Media transport couldn't be created (port in use?)", status);
-                return -1;
-            }
-        }
-        break;
-    case PJSIP_CANCEL_METHOD:
-    case PJSIP_BYE_METHOD:
-        if (app.media.trans_port[num_to]!=NULL)
-        {
-            status = pjmedia_transport_close(app.media.trans_port[num_to]);
-            if (status == PJ_SUCCESS)
-            {
-                PJ_LOG(3, (THIS_FILE, "Media transport(%d) has been closed successfully", num_to));
-                app.media.trans_port[num_to] = NULL;
-            }
-            else
-            {
-                app_perror(THIS_FILE, "Media transport(%d) hasn't been closed", num_to);
-            }
-        }
-        break;
-    default:
-        break;
+        app_perror(THIS_FILE, "Error calculating transports", status);
     }
 
     /* Change headers for hide dest host and request request */
     SBC_request_redirect(tdata, app.hosts[num_to], local_host);
+
+    if(rx_get_method(rdata)->id == PJSIP_INVITE_METHOD)
+        SBC_tx_redirect_sdp(tdata, num_to);
 
     /* Forward request */
     pj_sockaddr dst_host =
@@ -137,7 +114,8 @@ static pj_status_t on_rx_response(pjsip_rx_data *rdata)
     pjsip_via_hdr *hdr_via;
     pj_status_t status;
     pjsip_host_port local_host;
-    char num_host;
+    char num_to;
+    char num_from;
 
     /* Create txdata and clone msg from rx to tx */
     status = pjsip_endpt_create_tdata(app.sip_endpt, &tdata);
@@ -162,17 +140,29 @@ static pj_status_t on_rx_response(pjsip_rx_data *rdata)
     /* Change headers for hide dest host and redirect response */
     if (rx_get_port(rdata) == app.port[0])
     {
-        num_host = 1;
+        num_to = 1;
+        num_from = 0;
     }
     else if (rx_get_port(rdata) == app.port[1])
     {
-        num_host = 0;
+        num_to = 0;
+        num_from = 1;
+    }
+
+    status = SBC_calculate_transports(rdata, num_to, num_from);
+    if (status != PJ_SUCCESS)
+    {
+        app_perror(THIS_FILE, "Error calculating transports", status);
     }
 
     local_host.host = app.local_addr;
-    local_host.port = app.port[num_host];
+    local_host.port = app.port[num_to];
 
-    SBC_response_redirect(tdata, app.hosts[num_host], local_host, &res_addr);
+    pj_bzero(&res_addr, sizeof(res_addr));
+    SBC_response_redirect(tdata, app.hosts[num_to], local_host, &res_addr);
+
+    // if(rx_get_status(rdata) == PJSIP_SC_OK)
+    //     SBC_tx_redirect_sdp(tdata, num_to);
 
     /* Forward response */
     pj_sockaddr dst_host =
@@ -181,7 +171,7 @@ static pj_status_t on_rx_response(pjsip_rx_data *rdata)
                 PJ_AF_INET,
                 pj_htons(res_addr.dst_host.addr.port),
                 pj_inet_addr(&res_addr.dst_host.addr.host)}};
-    status = pjsip_transport_send(app.trans_port[num_host],
+    status = pjsip_transport_send(app.trans_port[num_to],
                                   tdata,
                                   (pj_sockaddr_t *)&dst_host,
                                   sizeof(dst_host),
@@ -273,7 +263,7 @@ static pj_status_t init_media()
 
     // for (i = 0; i < app.hosts_cnt; i++)
     // {
-    //     status = SBC_create_transport(app.media.trans_port[i], &rtp_port);
+    //     status = SBC_create_transport(app.media.trans[num_to].port[i], &rtp_port);
     //     if (status != PJ_SUCCESS)
     //     {
     //         app_perror(THIS_FILE, "Media transport couldn't be created (port in use?)", status);

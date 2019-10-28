@@ -39,7 +39,10 @@ typedef struct my_config
     struct
     {
         pjmedia_endpt *endpt;
-        pjmedia_transport *trans_port[MAX_PORTS];
+        struct{
+            pjmedia_transport *port;
+            int used;
+        } trans[MAX_PORTS];
         int rtp_port;
 
     } media;
@@ -75,27 +78,37 @@ pj_status_t SBC_response_redirect(pjsip_tx_data *tdata,
                                   pjsip_response_addr *res_addr);
 
 /* Changes Via header for hide local server */
-pj_status_t via_hdr_hide_host(pjsip_via_hdr *via,
+pj_status_t SBC_via_hdr_hide_host(pjsip_via_hdr *via,
                               pj_str_t host,
                               int port);
 
 /* Changes To header for redirect request/response */
-pj_status_t to_hdr_redirect(pjsip_to_hdr *to,
+pj_status_t SBC_to_hdr_redirect(pjsip_to_hdr *to,
                             pj_str_t host,
                             int port);
 
 /* Changes From header for hide local server*/
-pj_status_t from_hdr_hide_host(pjsip_from_hdr *from,
+pj_status_t SBC_from_hdr_hide_host(pjsip_from_hdr *from,
                                pj_str_t host,
                                int port);
 
 /* Changes Contact header for hide local server*/
-pj_status_t contact_hdr_hide_host(pjsip_contact_hdr *cont,
+pj_status_t SBC_contact_hdr_hide_host(pjsip_contact_hdr *cont,
                                   pj_str_t host,
                                   int port);
 
 /* Looks for a free port */
 pj_status_t SBC_create_transport(pjmedia_transport **trans_port,
                                  pj_uint16_t *rtp_port);
+
+/* Handler for RTP transports: creates, deletes
+ * transports, inc or dec transport counter.
+ */
+pj_status_t SBC_calculate_transports(pjsip_rx_data *rdata,
+                                 short num_to,
+                                 short num_from);
+
+pj_status_t SBC_tx_redirect_sdp(pjsip_tx_data *tdata,
+                                int tp_num);
 
 #endif //__MINI_SBC__
