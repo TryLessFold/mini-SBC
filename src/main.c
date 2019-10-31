@@ -161,8 +161,8 @@ static pj_status_t on_rx_response(pjsip_rx_data *rdata)
     pj_bzero(&res_addr, sizeof(res_addr));
     SBC_response_redirect(tdata, app.hosts[num_to], local_host, &res_addr);
 
-    // if(rx_get_status(rdata) == PJSIP_SC_OK)
-    //     SBC_tx_redirect_sdp(tdata, num_to);
+    if(rx_get_status(rdata) == PJSIP_SC_OK)
+         SBC_tx_redirect_sdp(tdata, num_to);
 
     /* Forward response */
     pj_sockaddr dst_host =

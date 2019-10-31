@@ -136,18 +136,23 @@ pj_status_t SBC_tx_redirect_sdp(pjsip_tx_data *tdata,
                                 int tp_num)
 {
     pj_status_t status;
-    pjmedia_sdp_session *sdp;
+    pjmedia_sdp_session *tmp_sdp, *sdp;
     pj_time_val tv;
     pjmedia_transport_info tpinfo;
+    pjsip_msg_body *body;
+    char buf[1024];
+    pj_str_t str_buf;
+    int length;
 
-    pjmedia_sdp_parse(app.pool, tdata->msg->body->data, tdata->msg->body->len, &sdp);
-    if (sdp != NULL)
+    if (tdata->msg->body != NULL)
     {
+        pjmedia_sdp_parse(app.pool, (char *)tdata->msg->body->data, tdata->msg->body->len, &tmp_sdp);
+        sdp = pjmedia_sdp_session_clone(app.pool, tmp_sdp);
         pjmedia_transport_info_init(&tpinfo);
         pjmedia_transport_get_info(app.media.trans[tp_num].port, &tpinfo);
 
-        pj_strdup(app.pool, &sdp->origin.addr, &app.local_addr);
-        pj_strdup(app.pool, &sdp->conn->addr, &app.local_addr);
+        pj_strcpy(&sdp->origin.addr, &app.local_addr);
+        pj_strcpy(&sdp->conn->addr, &app.local_addr);
         pj_gettimeofday(&tv);
         sdp->origin.version = sdp->origin.id = tv.sec + 2208988800UL;
 
@@ -156,6 +161,13 @@ pj_status_t SBC_tx_redirect_sdp(pjsip_tx_data *tdata,
         sdp->media[0]->desc.port = pj_ntohs(tpinfo.sock_info.rtp_addr_name.ipv4.sin_port);
         sdp->media[0]->desc.port_count = 1;
         sdp->media[0]->desc.transport = pj_str("RTP/AVP");
+
+        length = pjmedia_sdp_print(sdp, buf, sizeof(buf));
+        str_buf.ptr = buf;
+        str_buf.slen = length;
+        body = pjsip_msg_body_create(app.pool, &tdata->msg->body->content_type.type, &tdata->msg->body->content_type.subtype,
+                                     &str_buf);
+        pjsip_msg_body_copy(app.pool, tdata->msg->body, body);
     }
     return PJ_SUCCESS;
 }
