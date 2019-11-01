@@ -6,7 +6,9 @@ my_config_t app = {0};
 pj_bool_t quit_flag = 0;
 
 static pj_bool_t on_rx_request(pjsip_rx_data *rdata);
-static pj_status_t on_rx_response(pjsip_rx_data *rdata);
+static pj_bool_t on_rx_response(pjsip_rx_data *rdata);
+static void on_rx_rtp(void *user_data, void *pkt, pj_ssize_t size);
+static void on_rx_rtcp(void *user_data, void *pkt, pj_ssize_t size);
 
 static pjsip_module app_module =
     {
@@ -45,7 +47,9 @@ static pj_bool_t on_rx_request(pjsip_rx_data *rdata)
     pj_status_t status;
     pjsip_sip_uri *target;
     pjsip_host_port local_host;
-    short num_to, num_from;
+    pj_sockaddr from_addr;
+    short num_to;
+    short num_from;
 
     /* Create tdata */
     status = pjsip_endpt_create_request_fwd(app.sip_endpt, rdata, NULL, NULL, 0, &tdata);
@@ -82,8 +86,17 @@ static pj_bool_t on_rx_request(pjsip_rx_data *rdata)
     /* Change headers for hide dest host and request request */
     SBC_request_redirect(tdata, app.hosts[num_to], local_host);
 
-    if(rx_get_method(rdata)->id == PJSIP_INVITE_METHOD)
-        SBC_tx_redirect_sdp(tdata, num_to);
+    if (rx_get_method(rdata)->id == PJSIP_INVITE_METHOD)
+    {
+        SBC_tx_redirect_sdp(tdata, num_to, &from_addr);
+        status = pjmedia_transport_attach(app.media.trans[num_from].port, &app.media.trans[num_to].id,
+                                          &from_addr,
+                                          NULL,
+                                          sizeof(pj_sockaddr),
+                                          &on_rx_rtp,
+                                          &on_rx_rtcp);
+        pjmedia_transport_media_start(app.media.trans[num_from].port, 0, 0, 0, 0);
+    }
 
     /* Forward request */
     pj_sockaddr dst_host =
@@ -106,7 +119,7 @@ static pj_bool_t on_rx_request(pjsip_rx_data *rdata)
     pjsip_tx_data_dec_ref(tdata);
 }
 
-static pj_status_t on_rx_response(pjsip_rx_data *rdata)
+static pj_bool_t on_rx_response(pjsip_rx_data *rdata)
 {
     PJ_LOG(3, (THIS_FILE, "RXRes"));
     pjsip_tx_data *tdata;
@@ -114,8 +127,9 @@ static pj_status_t on_rx_response(pjsip_rx_data *rdata)
     pjsip_via_hdr *hdr_via;
     pj_status_t status;
     pjsip_host_port local_host;
-    char num_to;
-    char num_from;
+    pj_sockaddr from_addr;
+    short num_to;
+    short num_from;
 
     /* Create txdata and clone msg from rx to tx */
     status = pjsip_endpt_create_tdata(app.sip_endpt, &tdata);
@@ -153,6 +167,7 @@ static pj_status_t on_rx_response(pjsip_rx_data *rdata)
     if (status != PJ_SUCCESS)
     {
         app_perror(THIS_FILE, "Error calculating transports", status);
+        return PJ_TRUE;
     }
 
     local_host.host = app.local_addr;
@@ -161,9 +176,20 @@ static pj_status_t on_rx_response(pjsip_rx_data *rdata)
     pj_bzero(&res_addr, sizeof(res_addr));
     SBC_response_redirect(tdata, app.hosts[num_to], local_host, &res_addr);
 
-    if(rx_get_status(rdata) == PJSIP_SC_OK)
-         SBC_tx_redirect_sdp(tdata, num_to);
-
+    if (rx_get_status(rdata) == PJSIP_SC_OK)
+    {
+        SBC_tx_redirect_sdp(tdata, num_to, &from_addr);
+        if (tdata->msg->body != NULL)
+        {
+            status = pjmedia_transport_attach(app.media.trans[num_from].port, &app.media.trans[num_to].id,
+                                              &from_addr,
+                                              NULL,
+                                              sizeof(pj_sockaddr),
+                                              &on_rx_rtp,
+                                              &on_rx_rtcp);
+            pjmedia_transport_media_start(app.media.trans[num_from].port, 0, 0, 0, 0);
+        }
+    }
     /* Forward response */
     pj_sockaddr dst_host =
         {
@@ -183,6 +209,34 @@ static pj_status_t on_rx_response(pjsip_rx_data *rdata)
         return PJ_TRUE;
     }
     pjsip_tx_data_dec_ref(tdata);
+}
+
+static void on_rx_rtp(void *user_data, void *pkt, pj_ssize_t size)
+{
+    pj_status_t status;
+    int *num = (int *)user_data;
+    pjmedia_transport_info tp_info;
+    pjmedia_transport_info_init(&tp_info);
+    pjmedia_transport_get_info(app.media.trans[*num].port, &tp_info);
+    PJ_LOG(3, (THIS_FILE, "RX_RTP Transport %d %d", *num, pj_ntohs(tp_info.sock_info.rtp_addr_name.ipv4.sin_port)));
+    status = pjmedia_transport_send_rtp(app.media.trans[*num].port,
+                                        pkt, size);
+    if (status != PJ_SUCCESS)
+        app_perror(THIS_FILE, "Error forwarding RTP", status);
+}
+
+static void on_rx_rtcp(void *user_data, void *pkt, pj_ssize_t size)
+{
+    pj_status_t status;
+    int *num = (int *)user_data;
+    pjmedia_transport_info tp_info;
+    pjmedia_transport_info_init(&tp_info);
+    pjmedia_transport_get_info(app.media.trans[*num].port, &tp_info);
+    PJ_LOG(3, (THIS_FILE, "RX_RTCP Transport %d %d", *num, pj_ntohs(tp_info.sock_info.rtp_addr_name.ipv4.sin_port)));
+    status = pjmedia_transport_send_rtcp(app.media.trans[*num].port,
+                                         pkt, size);
+    if (status != PJ_SUCCESS)
+        app_perror(THIS_FILE, "Error forwarding RTCP", status);
 }
 
 static pj_status_t init_pj()

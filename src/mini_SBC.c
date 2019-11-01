@@ -133,7 +133,8 @@ pj_status_t init_SBC()
 }
 
 pj_status_t SBC_tx_redirect_sdp(pjsip_tx_data *tdata,
-                                int tp_num)
+                                short tp_num,
+                                pj_sockaddr *from_addr)
 {
     pj_status_t status;
     pjmedia_sdp_session *tmp_sdp, *sdp;
@@ -146,11 +147,13 @@ pj_status_t SBC_tx_redirect_sdp(pjsip_tx_data *tdata,
 
     if (tdata->msg->body != NULL)
     {
+        from_addr->ipv4.sin_family = PJ_AF_INET;
         pjmedia_sdp_parse(app.pool, (char *)tdata->msg->body->data, tdata->msg->body->len, &tmp_sdp);
         sdp = pjmedia_sdp_session_clone(app.pool, tmp_sdp);
         pjmedia_transport_info_init(&tpinfo);
         pjmedia_transport_get_info(app.media.trans[tp_num].port, &tpinfo);
 
+        from_addr->ipv4.sin_addr = pj_inet_addr(&sdp->origin.addr);
         pj_strcpy(&sdp->origin.addr, &app.local_addr);
         pj_strcpy(&sdp->conn->addr, &app.local_addr);
         pj_gettimeofday(&tv);
@@ -158,6 +161,8 @@ pj_status_t SBC_tx_redirect_sdp(pjsip_tx_data *tdata,
 
         sdp->media_count = 1;
         sdp->media[0]->desc.media = pj_str("audio");
+        from_addr->ipv4.sin_port = sdp->media[0]->desc.port;
+        app.media.trans[tp_num].dest_rtp_port = sdp->media[0]->desc.port;
         sdp->media[0]->desc.port = pj_ntohs(tpinfo.sock_info.rtp_addr_name.ipv4.sin_port);
         sdp->media[0]->desc.port_count = 1;
         sdp->media[0]->desc.transport = pj_str("RTP/AVP");

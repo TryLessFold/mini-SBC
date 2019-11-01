@@ -43,6 +43,7 @@ static inline pj_status_t inc(short num_to, short num_from, pj_uint16_t *rtp_por
             return -1;
         }
         app.media.trans[num_to].used = 1;
+        app.media.trans[num_to].id = num_to;
         status = SBC_create_transport(&app.media.trans[num_from].port, rtp_port);
         if (status != PJ_SUCCESS)
         {
@@ -61,6 +62,7 @@ static inline pj_status_t inc(short num_to, short num_from, pj_uint16_t *rtp_por
             return -1;
         }
         app.media.trans[num_from].used = 1;
+        app.media.trans[num_from].id = num_from;
     }
     else
     {

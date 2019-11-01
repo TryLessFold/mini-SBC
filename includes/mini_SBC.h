@@ -40,11 +40,12 @@ typedef struct my_config
     {
         pjmedia_endpt *endpt;
         struct{
+            int id;
             pjmedia_transport *port;
             int used;
+            int dest_rtp_port;
         } trans[MAX_PORTS];
         int rtp_port;
-
     } media;
 } my_config_t;
 
@@ -108,7 +109,12 @@ pj_status_t SBC_calculate_transports(pjsip_rx_data *rdata,
                                  short num_to,
                                  short num_from);
 
+/* Changes fields in sdp headers to local info
+ * and returns value in tp_num, which point to rtp port from rdata.
+ * 
+ */
 pj_status_t SBC_tx_redirect_sdp(pjsip_tx_data *tdata,
-                                int tp_num);
+                                short tp_num,
+                                pj_sockaddr *from_addr);
 
 #endif //__MINI_SBC__
