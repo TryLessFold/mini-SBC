@@ -145,6 +145,9 @@ pj_status_t SBC_tx_redirect_sdp(pjsip_tx_data *tdata,
     pj_str_t str_buf;
     int length;
 
+    pjsip_msg_find_remove_hdr(tdata->msg, PJSIP_H_CONTENT_LENGTH, NULL);
+    pjsip_msg_find_remove_hdr(tdata->msg, PJSIP_H_CONTENT_TYPE, NULL);
+
     if (tdata->msg->body != NULL)
     {
         from_addr->ipv4.sin_family = PJ_AF_INET;
@@ -157,11 +160,12 @@ pj_status_t SBC_tx_redirect_sdp(pjsip_tx_data *tdata,
         pj_strcpy(&sdp->origin.addr, &app.local_addr);
         pj_strcpy(&sdp->conn->addr, &app.local_addr);
         pj_gettimeofday(&tv);
-        sdp->origin.version = sdp->origin.id = tv.sec + 2208988800UL;
+        sdp->origin.version = sdp->origin.id = (tv.sec + 2208988800UL) >> 1;
+        sdp->origin.version++;
 
         sdp->media_count = 1;
         sdp->media[0]->desc.media = pj_str("audio");
-        from_addr->ipv4.sin_port = sdp->media[0]->desc.port;
+        from_addr->ipv4.sin_port = pj_htons(sdp->media[0]->desc.port);
         app.media.trans[tp_num].dest_rtp_port = sdp->media[0]->desc.port;
         sdp->media[0]->desc.port = pj_ntohs(tpinfo.sock_info.rtp_addr_name.ipv4.sin_port);
         sdp->media[0]->desc.port_count = 1;
@@ -172,7 +176,7 @@ pj_status_t SBC_tx_redirect_sdp(pjsip_tx_data *tdata,
         str_buf.slen = length;
         body = pjsip_msg_body_create(app.pool, &tdata->msg->body->content_type.type, &tdata->msg->body->content_type.subtype,
                                      &str_buf);
-        pjsip_msg_body_copy(app.pool, tdata->msg->body, body);
+        status = pjsip_msg_body_copy(app.pool, tdata->msg->body, body);
     }
     return PJ_SUCCESS;
 }
